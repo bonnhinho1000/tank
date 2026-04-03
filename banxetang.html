@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Tank Warrior: Infinite Warfare PRO</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; }
+        canvas { display: block; }
+        .overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; justify-content: center;
+            align-items: center; background: rgba(0,0,0,0.85); color: white; z-index: 10;
+        }
+        .btn {
+            padding: 12px 35px; margin: 10px; font-size: 18px; cursor: pointer;
+            background: #4CAF50; border: none; color: white; border-radius: 4px;
+            transition: 0.2s; font-weight: bold; width: 200px;
+        }
+        .btn:hover { background: #66bb6a; transform: translateY(-2px); }
+        .hidden { display: none !important; }
+        #ui-ingame {
+            position: absolute; top: 20px; left: 20px; color: #fff;
+            background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px;
+            border-left: 4px solid #4CAF50; pointer-events: none;
+        }
+        #reload-bar { width: 100%; height: 4px; background: #333; margin-top: 5px; }
+        #reload-fill { height: 100%; background: #00e5ff; width: 0%; }
+    </style>
+</head>
+<body>
+
+<div id="menu" class="overlay">
+    <h1 style="font-size: 50px; color: #4CAF50; letter-spacing: 5px;">TANK WARRIOR</h1>
+    <button class="btn" onclick="startGame()">VÀO TRẬN</button>
+</div>
+
+<div id="game-over" class="overlay hidden">
+    <h1 style="color: #f44336;">KẾT THÚC TRẬN ĐẤU</h1>
+    <p>Điểm số: <span id="final-score">0</span></p>
+    <button class="btn" onclick="location.reload()">CHƠI LẠI</button>
+</div>
+
+<div id="ui-ingame" class="hidden">
+    <div style="font-size: 12px;">GIÁP</div>
+    <div style="width: 150px; height: 10px; background: #222; margin-bottom: 5px;">
+        <div id="hp-fill" style="width: 100%; height: 100%; background: #4CAF50;"></div>
+    </div>
+    <div style="color: #ffeb3b; font-size: 20px;"><span id="clip">90</span> / <small id="reserve">180</small></div>
+    <div id="reload-bar"><div id="reload-fill"></div></div>
+    <div style="margin-top: 10px; font-weight: bold;">SCORE: <span id="score">0</span></div>
+</div>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+let gameState = 'MENU';
+
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+window.onresize = resize;
+resize();
+
+// --- DATA ---
+const player = {
+    x: 0, y: 0, ang: 0, targetAng: 0, hp: 100, score: 0,
+    clip: 90, maxClip: 90, reserve: 180,
+    reloading: false, reloadTime: 100, reloadTimer: 0,
+    speed: 4, triple: false
+};
+
+let enemies = [], bullets = [], enemyBullets = [], obstacles = [], items = [], particles = [], tracks = [];
+const keys = {};
+
+window.onkeydown = (e) => {
+    keys[e.code] = true;
+    if (e.code === 'KeyR' && gameState === 'PLAYING') startReload();
+};
+window.onkeyup = (e) => keys[e.code] = false;
+
+// Tạo Map
+for(let i=0; i<35; i++) {
+    obstacles.push({ x: (Math.random()-0.5)*4000, y: (Math.random()-0.5)*4000, size: 80 });
+}
+
+function startGame() {
+    document.getElementById('menu').classList.add('hidden');
+    document.getElementById('ui-ingame').classList.remove('hidden');
+    gameState = 'PLAYING';
+}
+
+function startReload() {
+    if (!player.reloading && player.clip < player.maxClip && player.reserve > 0) {
+        player.reloading = true; player.reloadTimer = 0;
+    }
+}
+
+function checkCollision(nx, ny, size) {
+    for(let ob of obstacles) {
+        if(nx + 15 > ob.x && nx - 15 < ob.x + ob.size && ny + 15 > ob.y && ny - 15 < ob.y + ob.size) return true;
+    }
+    return false;
+}
+
+function update() {
+    if (gameState !== 'PLAYING') return;
+
+    // Di chuyển Player
+    let nx = player.x, ny = player.y;
+    let isMoving = false;
+    if (keys['ArrowUp']) { ny -= player.speed; player.targetAng = 270; isMoving = true; }
+    if (keys['ArrowDown']) { ny += player.speed; player.targetAng = 90; isMoving = true; }
+    if (keys['ArrowLeft']) { nx -= player.speed; player.targetAng = 180; isMoving = true; }
+    if (keys['ArrowRight']) { nx += player.speed; player.targetAng = 0; isMoving = true; }
+
+    if(!checkCollision(nx, player.y, 40)) player.x = nx;
+    if(!checkCollision(player.x, ny, 40)) player.y = ny;
+
+    // Xoay mượt
+    let diff = player.targetAng - player.ang;
+    while(diff < -180) diff += 360; while(diff > 180) diff -= 360;
+    player.ang += diff * 0.15;
+
+    // Vệt xích & Khói
+    if(isMoving) {
+        if(Math.random() > 0.7) tracks.push({x: player.x, y: player.y, ang: player.ang, life: 200});
+        if(Math.random() > 0.5) particles.push({x: player.x, y: player.y, vx: 0, vy: 0, life: 20, size: 5, color: 'rgba(100,100,100,0.2)'});
+    }
+
+    // AI Địch di chuyển & bắn
+    enemies.forEach((en, i) => {
+        let dx = player.x - en.x, dy = player.y - en.y;
+        let dist = Math.sqrt(dx*dx + dy*dy);
+        en.ang = Math.atan2(dy, dx) * 180 / Math.PI;
+
+        if(dist > 250 && dist < 1000) {
+            let ex = en.x + Math.cos(en.ang * Math.PI/180) * 2;
+            let ey = en.y + Math.sin(en.ang * Math.PI/180) * 2;
+            if(!checkCollision(ex, ey, 40)) { en.x = ex; en.y = ey; }
+        }
+
+        if(dist < 500 && Math.random() < 0.02) {
+            enemyBullets.push({x: en.x, y: en.y, vx: Math.cos(en.ang * Math.PI/180)*8, vy: Math.sin(en.ang * Math.PI/180)*8, d: 0});
+        }
+    });
+
+    // Đạn Player
+    if (keys['Space'] && !player.reloading && player.clip > 0) {
+        const fire = (a) => bullets.push({x: player.x, y: player.y, vx: Math.cos(a*Math.PI/180)*12, vy: Math.sin(a*Math.PI/180)*12, d: 0});
+        fire(player.ang);
+        if(player.triple) { fire(player.ang-15); fire(player.ang+15); }
+        player.clip--; keys['Space'] = false;
+    }
+
+    bullets.forEach((b, i) => {
+        b.x += b.vx; b.y += b.vy; b.d += 12;
+        enemies.forEach((en, ei) => {
+            if(Math.abs(b.x - en.x) < 30 && Math.abs(b.y - en.y) < 30) {
+                en.hp -= 20; bullets.splice(i, 1);
+                if(en.hp <= 0) {
+                    player.score += 100;
+                    if(Math.random() < 0.5) items.push({x: en.x, y: en.y, type: Math.random() > 0.5 ? 'AMMO' : 'HP'});
+                    enemies.splice(ei, 1);
+                }
+            }
+        });
+        if(b.d > 800) bullets.splice(i, 1);
+    });
+
+    // Đạn địch trúng Player
+    enemyBullets.forEach((eb, i) => {
+        eb.x += eb.vx; eb.y += eb.vy; eb.d += 8;
+        if(Math.abs(eb.x - player.x) < 25 && Math.abs(eb.y - player.y) < 25) {
+            player.hp -= 10; enemyBullets.splice(i, 1);
+        }
+        if(eb.d > 800) enemyBullets.splice(i, 1);
+    });
+
+    // Nhặt đồ
+    items.forEach((it, i) => {
+        if(Math.abs(player.x - it.x) < 40 && Math.abs(player.y - it.y) < 40) {
+            if(it.type === 'AMMO') player.reserve += 90;
+            else player.hp = Math.min(100, player.hp + 20);
+            items.splice(i, 1);
+        }
+    });
+
+    // Reload logic
+    if(player.reloading) {
+        player.reloadTimer++;
+        document.getElementById('reload-fill').style.width = (player.reloadTimer/player.reloadTime*100) + "%";
+        if(player.reloadTimer >= player.reloadTime) {
+            let t = Math.min(player.maxClip - player.clip, player.reserve);
+            player.clip += t; player.reserve -= t;
+            player.reloading = false;
+            document.getElementById('reload-fill').style.width = "0%";
+        }
+    }
+
+    // Clean up
+    tracks.forEach((t, i) => { t.life--; if(t.life <= 0) tracks.splice(i, 1); });
+    particles.forEach((p, i) => { p.life--; if(p.life <= 0) particles.splice(i, 1); });
+
+    if(player.hp <= 0) {
+        gameState = 'GAMEOVER';
+        document.getElementById('game-over').classList.remove('hidden');
+        document.getElementById('final-score').innerText = player.score;
+    }
+
+    document.getElementById('hp-fill').style.width = player.hp + "%";
+    document.getElementById('clip').innerText = player.clip;
+    document.getElementById('reserve').innerText = player.reserve;
+    document.getElementById('score').innerText = player.score;
+}
+
+function draw() {
+    ctx.fillStyle = '#2c3e50'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const cx = canvas.width/2, cy = canvas.height/2;
+
+    // Vẽ vệt xích
+    tracks.forEach(t => {
+        ctx.globalAlpha = t.life / 200;
+        ctx.save(); ctx.translate(t.x - player.x + cx, t.y - player.y + cy); ctx.rotate(t.ang * Math.PI/180);
+        ctx.fillStyle = '#1a1a1a'; ctx.fillRect(-20, -18, 10, 4); ctx.fillRect(-20, 14, 10, 4);
+        ctx.restore(); ctx.globalAlpha = 1;
+    });
+
+    // Vẽ đá
+    ctx.fillStyle = '#7f8c8d';
+    obstacles.forEach(ob => ctx.fillRect(ob.x - player.x + cx, ob.y - player.y + cy, ob.size, ob.size));
+
+    // Vẽ đồ rơi
+    items.forEach(it => {
+        ctx.fillStyle = it.type === 'AMMO' ? '#f1c40f' : '#2ecc71';
+        ctx.fillRect(it.x - player.x + cx - 10, it.y - player.y + cy - 10, 20, 20);
+    });
+
+    // Vẽ Xe Player
+    drawTank(cx, cy, player.ang, '#27ae60');
+
+    // Vẽ Địch
+    enemies.forEach(en => drawTank(en.x - player.x + cx, en.y - player.y + cy, en.ang, '#e74c3c'));
+
+    // Vẽ Đạn
+    ctx.fillStyle = '#f1c40f'; bullets.forEach(b => ctx.fillRect(b.x - player.x + cx - 3, b.y - player.y + cy - 3, 6, 6));
+    ctx.fillStyle = '#e67e22'; enemyBullets.forEach(eb => ctx.fillRect(eb.x - player.x + cx - 3, eb.y - player.y + cy - 3, 6, 6));
+
+    // Vẽ Khói
+    particles.forEach(p => {
+        ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x - player.x + cx, p.y - player.y + cy, p.size, 0, Math.PI*2); ctx.fill();
+    });
+}
+
+function drawTank(x, y, ang, col) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(ang * Math.PI/180);
+    ctx.fillStyle = '#333'; ctx.fillRect(-22, -20, 44, 8); ctx.fillRect(-22, 12, 44, 8); // Xích
+    ctx.fillStyle = col; ctx.fillRect(-18, -15, 36, 30); // Thân
+    ctx.fillStyle = '#222'; ctx.fillRect(0, -3, 30, 6); // Nòng
+    ctx.restore();
+}
+
+setInterval(() => {
+    if(gameState === 'PLAYING' && enemies.length < 5) {
+        enemies.push({x: player.x + (Math.random()-0.5)*1500, y: player.y + (Math.random()-0.5)*1500, ang: 0, hp: 60});
+    }
+}, 3000);
+
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+loop();
+</script>
+</body>
+</html>
